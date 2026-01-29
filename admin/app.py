@@ -20,8 +20,9 @@ app.config['SECRET_KEY'] = 'wget-admin-secret-key'
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Configuration
-WGET_PATH = os.environ.get('WGET_PATH', '/Users/nick/DEV/WCLoner/wget/src/wget')
-DOWNLOADS_DIR = Path('/tmp/wget-admin-downloads')
+BASE_DIR = Path(__file__).parent.parent
+WGET_PATH = os.environ.get('WGET_PATH', str(BASE_DIR / 'src' / 'wget'))
+DOWNLOADS_DIR = BASE_DIR / 'downloads'
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 
 # Store active jobs

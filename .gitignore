@@ -137,3 +137,6 @@ build-aux/update-copyright
 build-aux/useless-if-before-free
 build-aux/vc-list-files
 build-aux/config.rpath
+
+# Downloads folder (cloned sites)
+downloads/
