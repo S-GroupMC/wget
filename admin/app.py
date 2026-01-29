@@ -31,7 +31,7 @@ jobs = {}
 
 
 class WgetJob:
-    def __init__(self, job_id, url, options, use_wget2=False):
+    def __init__(self, job_id, url, options, use_wget2=False, folder_name=None):
         self.id = job_id
         self.url = url
         self.options = options
@@ -44,7 +44,9 @@ class WgetJob:
         self.process = None
         self.started_at = None
         self.finished_at = None
-        self.output_dir = DOWNLOADS_DIR / job_id
+        # Use folder_name if provided, otherwise fall back to job_id
+        self.folder_name = folder_name or job_id
+        self.output_dir = DOWNLOADS_DIR / self.folder_name
         self.output_dir.mkdir(exist_ok=True)
     
     def to_dict(self):
@@ -93,6 +95,22 @@ def build_wget_command(job):
     # Span hosts (for external resources)
     if opts.get('span_hosts', False):
         cmd.append('-H')
+    
+    # Include subdomains - extract domain from URL and add wildcard
+    if opts.get('include_subdomains', False):
+        from urllib.parse import urlparse
+        parsed = urlparse(job.url)
+        domain = parsed.netloc
+        # Remove www. prefix if present
+        if domain.startswith('www.'):
+            domain = domain[4:]
+        # Add domain filter to include all subdomains
+        cmd.extend(['-D', f'.{domain},{domain}'])
+    
+    # Additional domains to include
+    extra_domains = opts.get('extra_domains', '')
+    if extra_domains:
+        cmd.extend(['-D', extra_domains])
     
     # No parent (don't go up directories)
     if opts.get('no_parent', True):
@@ -260,11 +278,22 @@ def create_job():
     if not url.startswith(('http://', 'https://')):
         url = 'https://' + url
     
+    # Generate folder name from domain
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    domain = parsed.netloc
+    # Remove www. prefix
+    if domain.startswith('www.'):
+        domain = domain[4:]
+    # Create unique folder name with timestamp
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    folder_name = f"{domain}_{timestamp}"
+    
     job_id = str(uuid.uuid4())[:8]
     options = data.get('options', {})
     use_wget2 = data.get('use_wget2', False)
     
-    job = WgetJob(job_id, url, options, use_wget2)
+    job = WgetJob(job_id, url, options, use_wget2, folder_name)
     jobs[job_id] = job
     
     # Start job in background
@@ -457,6 +486,21 @@ def list_downloads():
 def browse_download(filepath):
     """Serve files from downloads directory for built-in viewer"""
     return send_from_directory(DOWNLOADS_DIR, filepath)
+
+
+@app.route('/api/downloads/<folder_name>', methods=['DELETE'])
+def delete_download(folder_name):
+    """Delete a downloaded folder"""
+    import shutil
+    folder_path = DOWNLOADS_DIR / folder_name
+    if not folder_path.exists():
+        return jsonify({'error': 'Folder not found'}), 404
+    
+    try:
+        shutil.rmtree(folder_path)
+        return jsonify({'success': True, 'deleted': folder_name})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/find-index/<folder_name>')
