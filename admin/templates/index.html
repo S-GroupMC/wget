@@ -41,6 +41,13 @@
                 </div>
                 <div class="text-right">
                     <span class="text-purple-200 text-sm">Powered by GNU Wget</span>
+                    <div class="text-purple-200 text-xs mt-1">
+                        <i class="fas fa-folder mr-1"></i>
+                        <span id="downloadsPath">{{ downloads_dir }}</span>
+                        <button onclick="openDownloadsFolder()" class="ml-2 hover:text-white" title="Open folder">
+                            <i class="fas fa-external-link-alt"></i>
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -159,6 +166,23 @@
                     </div>
                 </div>
 
+                <!-- Wget Version Toggle -->
+                <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <div class="flex items-center">
+                        <span class="text-sm text-gray-700 mr-3">Engine:</span>
+                        <label class="inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="useWget2" class="sr-only peer">
+                            <div class="relative w-11 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-purple-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                            <span class="ms-3 text-sm font-medium text-gray-700" id="wgetVersionLabel">wget</span>
+                        </label>
+                    </div>
+                    <div id="wget2Badge" class="hidden">
+                        <span class="px-2 py-1 text-xs bg-green-100 text-green-700 rounded-full">
+                            <i class="fas fa-bolt mr-1"></i>HTTP/2, Multi-thread, Brotli
+                        </span>
+                    </div>
+                </div>
+
                 <!-- Submit Button -->
                 <button type="submit" 
                         class="w-full gradient-bg text-white py-3 px-6 rounded-lg font-semibold hover:opacity-90 transition-opacity flex items-center justify-center">
@@ -169,7 +193,7 @@
         </div>
 
         <!-- Jobs List -->
-        <div class="bg-white rounded-xl card-shadow p-6">
+        <div class="bg-white rounded-xl card-shadow p-6 mb-8">
             <h2 class="text-xl font-semibold text-gray-800 mb-4">
                 <i class="fas fa-tasks text-purple-600 mr-2"></i>
                 Jobs
@@ -180,6 +204,25 @@
                 <div class="text-center text-gray-500 py-8">
                     <i class="fas fa-inbox text-4xl mb-3"></i>
                     <p>No jobs yet. Start cloning a website!</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Downloaded Sites -->
+        <div class="bg-white rounded-xl card-shadow p-6">
+            <h2 class="text-xl font-semibold text-gray-800 mb-4">
+                <i class="fas fa-folder text-purple-600 mr-2"></i>
+                Downloaded Sites
+                <span id="downloadsCount" class="text-sm font-normal text-gray-500 ml-2">(0)</span>
+                <button onclick="loadDownloads()" class="ml-2 text-sm text-purple-600 hover:text-purple-800">
+                    <i class="fas fa-sync-alt"></i>
+                </button>
+            </h2>
+            
+            <div id="downloadsList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div class="text-center text-gray-500 py-8 col-span-full">
+                    <i class="fas fa-spinner fa-spin text-2xl mb-3"></i>
+                    <p>Loading...</p>
                 </div>
             </div>
         </div>
@@ -196,12 +239,20 @@
                     </div>
                     <div class="flex items-center space-x-4 mt-2 text-sm text-gray-500">
                         <span class="job-id"></span>
+                        <span class="job-engine hidden px-1.5 py-0.5 text-xs bg-purple-100 text-purple-700 rounded">wget2</span>
                         <span class="job-files"><i class="fas fa-file mr-1"></i><span class="count">0</span> files</span>
                         <span class="job-size"><i class="fas fa-database mr-1"></i><span class="size">0 B</span></span>
                         <span class="job-time"><i class="fas fa-clock mr-1"></i><span class="time">--</span></span>
                     </div>
+                    <div class="job-path mt-1 text-xs text-gray-400 truncate max-w-lg">
+                        <i class="fas fa-folder-open mr-1"></i>
+                        <span class="path"></span>
+                    </div>
                 </div>
                 <div class="flex items-center space-x-2">
+                    <button class="btn-folder px-3 py-1 bg-purple-100 text-purple-700 rounded hover:bg-purple-200 text-sm" title="Open folder">
+                        <i class="fas fa-folder-open"></i>
+                    </button>
                     <button class="btn-open hidden px-3 py-1 bg-green-100 text-green-700 rounded hover:bg-green-200 text-sm">
                         <i class="fas fa-external-link-alt mr-1"></i> Open
                     </button>
@@ -231,6 +282,14 @@
             <div class="job-log hidden mt-3">
                 <div class="log-container bg-gray-900 text-green-400 p-3 rounded-lg max-h-48 overflow-y-auto">
                     <pre class="log-content whitespace-pre-wrap"></pre>
+                </div>
+            </div>
+            
+            <!-- Files List -->
+            <div class="job-files-list hidden mt-3">
+                <div class="bg-gray-50 rounded-lg p-3 max-h-48 overflow-y-auto">
+                    <div class="text-xs text-gray-600 font-medium mb-2">Downloaded files:</div>
+                    <div class="files-content grid grid-cols-1 md:grid-cols-2 gap-1 text-xs"></div>
                 </div>
             </div>
         </div>
@@ -296,11 +355,13 @@
                 reject: document.getElementById('reject').value
             };
             
+            const useWget2 = document.getElementById('useWget2').checked;
+            
             try {
                 const response = await fetch('/api/jobs', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url, options })
+                    body: JSON.stringify({ url, options, use_wget2: useWget2 })
                 });
                 
                 const job = await response.json();
@@ -332,6 +393,17 @@
                 card.querySelector('.btn-stop').addEventListener('click', () => stopJob(job.id));
                 card.querySelector('.btn-download').addEventListener('click', () => downloadJob(job.id));
                 card.querySelector('.btn-open').addEventListener('click', () => openJob(job.id));
+                card.querySelector('.btn-folder').addEventListener('click', () => openJobFolder(job.id));
+                
+                // Toggle files list
+                card.querySelector('.job-path').addEventListener('click', () => {
+                    const filesList = card.querySelector('.job-files-list');
+                    filesList.classList.toggle('hidden');
+                    if (!filesList.classList.contains('hidden')) {
+                        loadJobFiles(job.id, card);
+                    }
+                });
+                card.querySelector('.job-path').style.cursor = 'pointer';
                 
                 const jobsList = document.getElementById('jobsList');
                 // Remove empty state
@@ -347,6 +419,12 @@
             card.querySelector('.job-id').textContent = `#${job.id}`;
             card.querySelector('.job-files .count').textContent = job.files_downloaded;
             card.querySelector('.job-size .size').textContent = job.total_size;
+            card.querySelector('.job-path .path').textContent = job.output_dir;
+            
+            // Show wget2 badge if used
+            if (job.use_wget2) {
+                card.querySelector('.job-engine').classList.remove('hidden');
+            }
             
             // Status icon
             const statusIcon = card.querySelector('.job-status-icon');
@@ -449,9 +527,153 @@
             }
         }
         
+        async function openJobFolder(jobId) {
+            try {
+                await fetch(`/api/jobs/${jobId}/open-folder`);
+            } catch (error) {
+                console.error('Failed to open folder:', error);
+            }
+        }
+        
+        async function openDownloadsFolder() {
+            try {
+                await fetch('/api/open-downloads');
+            } catch (error) {
+                console.error('Failed to open downloads folder:', error);
+            }
+        }
+        
+        async function loadJobFiles(jobId, card) {
+            try {
+                const response = await fetch(`/api/jobs/${jobId}/files`);
+                const files = await response.json();
+                const filesContent = card.querySelector('.files-content');
+                
+                if (files.length === 0) {
+                    filesContent.innerHTML = '<span class="text-gray-400">No files yet...</span>';
+                    return;
+                }
+                
+                filesContent.innerHTML = files.slice(0, 50).map(f => `
+                    <div class="flex items-center text-gray-600 py-0.5">
+                        <i class="fas fa-file text-gray-400 mr-1"></i>
+                        <span class="truncate flex-1" title="${f.path}">${f.path}</span>
+                        <span class="text-gray-400 ml-2">${f.size}</span>
+                    </div>
+                `).join('');
+                
+                if (files.length > 50) {
+                    filesContent.innerHTML += `<div class="text-gray-400 mt-1">... and ${files.length - 50} more files</div>`;
+                }
+            } catch (error) {
+                console.error('Failed to load files:', error);
+            }
+        }
+        
         function updateJobCount() {
             document.getElementById('jobCount').textContent = `(${jobs.size})`;
         }
+        
+        // Wget2 toggle
+        document.getElementById('useWget2').addEventListener('change', function() {
+            const label = document.getElementById('wgetVersionLabel');
+            const badge = document.getElementById('wget2Badge');
+            if (this.checked) {
+                label.textContent = 'wget2';
+                badge.classList.remove('hidden');
+            } else {
+                label.textContent = 'wget';
+                badge.classList.add('hidden');
+            }
+        });
+        
+        // Check wget2 availability
+        async function checkWget2() {
+            try {
+                const response = await fetch('/api/config');
+                const config = await response.json();
+                if (!config.wget2_available) {
+                    document.getElementById('useWget2').disabled = true;
+                    document.getElementById('wgetVersionLabel').textContent = 'wget (wget2 not installed)';
+                }
+            } catch (error) {
+                console.error('Failed to check wget2:', error);
+            }
+        }
+        checkWget2();
+        
+        // Load downloaded sites
+        async function loadDownloads() {
+            try {
+                const response = await fetch('/api/downloads');
+                const downloads = await response.json();
+                const container = document.getElementById('downloadsList');
+                
+                document.getElementById('downloadsCount').textContent = `(${downloads.length})`;
+                
+                if (downloads.length === 0) {
+                    container.innerHTML = `
+                        <div class="text-center text-gray-500 py-8 col-span-full">
+                            <i class="fas fa-folder-open text-4xl mb-3"></i>
+                            <p>No downloaded sites yet</p>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                container.innerHTML = downloads.map(d => `
+                    <div class="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                        <div class="flex items-start justify-between">
+                            <div class="flex-1 min-w-0">
+                                <h3 class="font-medium text-gray-800 truncate" title="${d.name}">${d.name}</h3>
+                                <div class="text-sm text-gray-500 mt-1">
+                                    <span><i class="fas fa-file mr-1"></i>${d.files} files</span>
+                                    <span class="ml-3"><i class="fas fa-database mr-1"></i>${d.size}</span>
+                                </div>
+                                <div class="text-xs text-gray-400 mt-1">
+                                    <i class="fas fa-clock mr-1"></i>${d.date}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex items-center space-x-2 mt-3">
+                            <button onclick="openDownloadFolder('${d.path}')" class="flex-1 px-3 py-1.5 bg-purple-100 text-purple-700 rounded hover:bg-purple-200 text-sm">
+                                <i class="fas fa-folder-open mr-1"></i> Open
+                            </button>
+                            <button onclick="openDownloadInBrowser('${d.path}')" class="flex-1 px-3 py-1.5 bg-green-100 text-green-700 rounded hover:bg-green-200 text-sm">
+                                <i class="fas fa-globe mr-1"></i> View
+                            </button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                console.error('Failed to load downloads:', error);
+                document.getElementById('downloadsList').innerHTML = `
+                    <div class="text-center text-red-500 py-8 col-span-full">
+                        <i class="fas fa-exclamation-circle text-4xl mb-3"></i>
+                        <p>Failed to load downloads</p>
+                    </div>
+                `;
+            }
+        }
+        
+        async function openDownloadFolder(path) {
+            try {
+                await fetch('/api/open-folder?path=' + encodeURIComponent(path));
+            } catch (error) {
+                console.error('Failed to open folder:', error);
+            }
+        }
+        
+        async function openDownloadInBrowser(path) {
+            try {
+                await fetch('/api/open-site?path=' + encodeURIComponent(path));
+            } catch (error) {
+                console.error('Failed to open site:', error);
+            }
+        }
+        
+        // Load downloads on page load
+        loadDownloads();
     </script>
 </body>
 </html>

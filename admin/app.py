@@ -22,6 +22,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 # Configuration
 BASE_DIR = Path(__file__).parent.parent
 WGET_PATH = os.environ.get('WGET_PATH', str(BASE_DIR / 'src' / 'wget'))
+WGET2_PATH = os.environ.get('WGET2_PATH', '/opt/homebrew/bin/wget2')
 DOWNLOADS_DIR = BASE_DIR / 'downloads'
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 
@@ -30,10 +31,11 @@ jobs = {}
 
 
 class WgetJob:
-    def __init__(self, job_id, url, options):
+    def __init__(self, job_id, url, options, use_wget2=False):
         self.id = job_id
         self.url = url
         self.options = options
+        self.use_wget2 = use_wget2
         self.status = 'pending'
         self.progress = 0
         self.files_downloaded = 0
@@ -57,13 +59,17 @@ class WgetJob:
             'output_lines': self.output_lines[-50:],  # Last 50 lines
             'started_at': self.started_at.isoformat() if self.started_at else None,
             'finished_at': self.finished_at.isoformat() if self.finished_at else None,
-            'output_dir': str(self.output_dir)
+            'output_dir': str(self.output_dir),
+            'use_wget2': self.use_wget2
         }
 
 
 def build_wget_command(job):
     """Build wget command from job options"""
-    cmd = [WGET_PATH]
+    if job.use_wget2:
+        cmd = [WGET2_PATH]
+    else:
+        cmd = [WGET_PATH]
     opts = job.options
     
     # Recursive options
@@ -171,12 +177,19 @@ def run_wget_job(job_id):
                 job.output_lines.append(line)
                 
                 # Parse progress info
-                if 'saved' in line.lower():
+                if 'saved' in line.lower() or 'Saving' in line or 'saved' in line:
                     job.files_downloaded += 1
                 
-                # Emit update every few lines
-                if len(job.output_lines) % 5 == 0:
-                    socketio.emit('job_update', job.to_dict())
+                # Calculate current size
+                try:
+                    total_size = sum(f.stat().st_size for f in job.output_dir.rglob('*') if f.is_file())
+                    job.total_size = format_size(total_size)
+                    job.files_downloaded = sum(1 for _ in job.output_dir.rglob('*') if _.is_file())
+                except:
+                    pass
+                
+                # Emit update every line for real-time feedback
+                socketio.emit('job_update', job.to_dict())
         
         process.wait()
         
@@ -207,7 +220,7 @@ def format_size(size_bytes):
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('index.html', downloads_dir=str(DOWNLOADS_DIR))
 
 
 @app.route('/api/jobs', methods=['GET'])
@@ -228,8 +241,9 @@ def create_job():
     
     job_id = str(uuid.uuid4())[:8]
     options = data.get('options', {})
+    use_wget2 = data.get('use_wget2', False)
     
-    job = WgetJob(job_id, url, options)
+    job = WgetJob(job_id, url, options, use_wget2)
     jobs[job_id] = job
     
     # Start job in background
@@ -338,6 +352,84 @@ def open_in_browser(job_id):
         return jsonify({'success': True, 'file': str(index_files[0])})
     
     return jsonify({'error': 'No index.html found'}), 404
+
+
+@app.route('/api/jobs/<job_id>/open-folder')
+def open_folder(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    os.system(f'open "{job.output_dir}"')
+    return jsonify({'success': True, 'path': str(job.output_dir)})
+
+
+@app.route('/api/config')
+def get_config():
+    wget2_available = os.path.exists(WGET2_PATH)
+    return jsonify({
+        'downloads_dir': str(DOWNLOADS_DIR),
+        'wget_path': WGET_PATH,
+        'wget2_path': WGET2_PATH,
+        'wget2_available': wget2_available
+    })
+
+
+@app.route('/api/open-downloads')
+def open_downloads_folder():
+    os.system(f'open "{DOWNLOADS_DIR}"')
+    return jsonify({'success': True, 'path': str(DOWNLOADS_DIR)})
+
+
+@app.route('/api/open-folder')
+def open_any_folder():
+    path = request.args.get('path', '')
+    if path and os.path.exists(path):
+        os.system(f'open "{path}"')
+        return jsonify({'success': True})
+    return jsonify({'error': 'Path not found'}), 404
+
+
+@app.route('/api/open-site')
+def open_site_in_browser():
+    path = request.args.get('path', '')
+    if path and os.path.exists(path):
+        # Find index.html
+        index_files = list(Path(path).rglob('index.html'))
+        if index_files:
+            os.system(f'open "{index_files[0]}"')
+            return jsonify({'success': True, 'file': str(index_files[0])})
+        # If no index.html, just open folder
+        os.system(f'open "{path}"')
+        return jsonify({'success': True, 'opened': 'folder'})
+    return jsonify({'error': 'Path not found'}), 404
+
+
+@app.route('/api/downloads')
+def list_downloads():
+    """List all downloaded folders in downloads directory"""
+    downloads = []
+    for item in DOWNLOADS_DIR.iterdir():
+        if item.is_dir():
+            # Calculate folder size and file count
+            files = list(item.rglob('*'))
+            file_count = sum(1 for f in files if f.is_file())
+            total_size = sum(f.stat().st_size for f in files if f.is_file())
+            
+            # Get modification time
+            mtime = datetime.fromtimestamp(item.stat().st_mtime)
+            
+            downloads.append({
+                'name': item.name,
+                'path': str(item),
+                'files': file_count,
+                'size': format_size(total_size),
+                'date': mtime.strftime('%Y-%m-%d %H:%M')
+            })
+    
+    # Sort by date descending
+    downloads.sort(key=lambda x: x['date'], reverse=True)
+    return jsonify(downloads)
 
 
 @socketio.on('connect')
