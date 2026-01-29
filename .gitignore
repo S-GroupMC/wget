@@ -110,3 +110,30 @@ fuzz/Makefile.in
 # others
 /tags
 /cscope.out
+
+# Generated m4 files from gnulib
+m4/*.m4
+!m4/wget*.m4
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+
+# Generated docs
+doc/gendocs_template
+doc/gendocs_template_min
+
+# Build-aux generated
+build-aux/announce-gen
+build-aux/do-release-commit-and-tag
+build-aux/gendocs.sh
+build-aux/git-version-gen
+build-aux/gitlog-to-changelog
+build-aux/gnu-web-doc-update
+build-aux/gnupload
+build-aux/update-copyright
+build-aux/useless-if-before-free
+build-aux/vc-list-files
+build-aux/config.rpath
