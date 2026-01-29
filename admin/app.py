@@ -135,6 +135,27 @@ def build_wget_command(job):
     retries = opts.get('retries', 3)
     cmd.extend(['--tries', str(retries)])
     
+    # Restrict file names (fix query strings in filenames)
+    if opts.get('restrict_file_names', True):
+        cmd.append('--restrict-file-names=windows')
+    
+    # Trust server names (use final URL after redirects)
+    if opts.get('trust_server_names', True):
+        cmd.append('--trust-server-names')
+    
+    # Ignore robots.txt
+    if opts.get('ignore_robots', False):
+        cmd.append('-e')
+        cmd.append('robots=off')
+    
+    # No cookies (each page as new visit)
+    if opts.get('no_cookies', False):
+        cmd.append('--no-cookies')
+    
+    # Mirror mode (recursive + timestamps + infinite depth)
+    if opts.get('mirror_mode', False):
+        cmd.append('--mirror')
+    
     # Output directory
     cmd.extend(['-P', str(job.output_dir)])
     
@@ -430,6 +451,35 @@ def list_downloads():
     # Sort by date descending
     downloads.sort(key=lambda x: x['date'], reverse=True)
     return jsonify(downloads)
+
+
+@app.route('/api/browse/<path:filepath>')
+def browse_download(filepath):
+    """Serve files from downloads directory for built-in viewer"""
+    return send_from_directory(DOWNLOADS_DIR, filepath)
+
+
+@app.route('/api/find-index/<folder_name>')
+def find_index_html(folder_name):
+    """Find index.html in a download folder"""
+    folder_path = DOWNLOADS_DIR / folder_name
+    if not folder_path.exists():
+        return jsonify({'error': 'Folder not found'}), 404
+    
+    # Search for index.html
+    index_files = list(folder_path.rglob('index.html'))
+    if index_files:
+        # Return the first one, relative to downloads dir
+        rel_path = index_files[0].relative_to(DOWNLOADS_DIR)
+        return jsonify({'path': str(rel_path)})
+    
+    # No index.html found, return first HTML file
+    html_files = list(folder_path.rglob('*.html'))
+    if html_files:
+        rel_path = html_files[0].relative_to(DOWNLOADS_DIR)
+        return jsonify({'path': str(rel_path)})
+    
+    return jsonify({'error': 'No HTML files found'}), 404
 
 
 @socketio.on('connect')
