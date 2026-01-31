@@ -101,7 +101,7 @@ class WgetJob:
         self.url = url
         self.options = options
         self.use_wget2 = use_wget2
-        self.engine = engine  # 'wget', 'wget2', 'puppeteer', 'httrack'
+        self.engine = engine  # 'wget', 'wget2', 'puppeteer', 'httrack', 'smart'
         self.status = 'pending'
         self.progress = 0
         self.files_downloaded = 0
@@ -110,6 +110,7 @@ class WgetJob:
         self.process = None
         self.started_at = None
         self.finished_at = None
+        self.stop_requested = False  # Flag to stop Smart mode loop
         # Use folder_name if provided, otherwise fall back to job_id
         self.folder_name = folder_name or job_id
         self.output_dir = DOWNLOADS_DIR / self.folder_name
@@ -439,22 +440,29 @@ def run_wget_job(job_id):
         save_jobs()
         
         # Step 1: wget2 for fast static content
-        cmd_wget2 = build_wget_command(job)
-        run_single_engine(job, "wget2 (static content)", cmd_wget2)
+        if not job.stop_requested:
+            cmd_wget2 = build_wget_command(job)
+            run_single_engine(job, "wget2 (static content)", cmd_wget2)
         
         # Step 2: Puppeteer for JS-rendered content
-        cmd_puppeteer = build_puppeteer_command(job)
-        run_single_engine(job, "Puppeteer (JS rendering)", cmd_puppeteer)
+        if not job.stop_requested:
+            cmd_puppeteer = build_puppeteer_command(job)
+            run_single_engine(job, "Puppeteer (JS rendering)", cmd_puppeteer)
         
         # Step 3: httrack for anything missed
-        cmd_httrack = build_httrack_command(job)
-        run_single_engine(job, "HTTrack (final pass)", cmd_httrack)
+        if not job.stop_requested:
+            cmd_httrack = build_httrack_command(job)
+            run_single_engine(job, "HTTrack (final pass)", cmd_httrack)
         
         # Finish
-        job.status = 'completed'
-        job.finished_at = datetime.now()
-        job.output_lines.append("")
-        job.output_lines.append("SMART MODE COMPLETED - All engines finished")
+        if job.stop_requested:
+            job.output_lines.append("")
+            job.output_lines.append("SMART MODE STOPPED by user")
+        else:
+            job.status = 'completed'
+            job.finished_at = datetime.now()
+            job.output_lines.append("")
+            job.output_lines.append("SMART MODE COMPLETED - All engines finished")
         socketio.emit('job_update', job.to_dict())
         save_jobs()
         return
@@ -651,11 +659,20 @@ def stop_job(job_id):
     if not job:
         return jsonify({'error': 'Job not found'}), 404
     
+    # Set stop flag to break Smart mode loop
+    job.stop_requested = True
+    
     if job.process and job.process.poll() is None:
         job.process.terminate()
-        job.status = 'stopped'
-        job.finished_at = datetime.now()
-        save_jobs()
+        try:
+            job.process.wait(timeout=2)
+        except:
+            job.process.kill()
+    
+    job.status = 'stopped'
+    job.finished_at = datetime.now()
+    save_jobs()
+    socketio.emit('job_update', job.to_dict())
     
     return jsonify(job.to_dict())
 
@@ -667,11 +684,20 @@ def pause_job(job_id):
     if not job:
         return jsonify({'error': 'Job not found'}), 404
     
-    if job.process and job.process.poll() is None and job.status == 'running':
-        job.process.send_signal(signal.SIGSTOP)
-        job.status = 'paused'
-        socketio.emit('job_update', job.to_dict())
-        save_jobs()
+    if job.status != 'running':
+        return jsonify({'error': 'Job is not running', 'status': job.status}), 400
+    
+    if job.process and job.process.poll() is None:
+        try:
+            job.process.send_signal(signal.SIGSTOP)
+            job.status = 'paused'
+            job.output_lines.append("[PAUSED by user]")
+            socketio.emit('job_update', job.to_dict())
+            save_jobs()
+        except Exception as e:
+            return jsonify({'error': f'Failed to pause: {str(e)}'}), 500
+    else:
+        return jsonify({'error': 'No active process to pause'}), 400
     
     return jsonify(job.to_dict())
 

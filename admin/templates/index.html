@@ -778,7 +778,11 @@
         
         async function pauseJob(jobId) {
             try {
-                await fetch(`/api/jobs/${jobId}/pause`, { method: 'POST' });
+                const response = await fetch(`/api/jobs/${jobId}/pause`, { method: 'POST' });
+                if (!response.ok) {
+                    const data = await response.json();
+                    console.error('Pause failed:', data.error);
+                }
             } catch (error) {
                 console.error('Failed to pause job:', error);
             }
