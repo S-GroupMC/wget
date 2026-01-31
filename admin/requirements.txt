@@ -1,4 +1,11 @@
-flask==3.0.0
-flask-socketio==5.3.6
-python-socketio==5.10.0
-eventlet==0.34.2
+flask>=3.0.0
+flask-socketio>=5.3.6
+python-socketio>=5.10.0
+eventlet>=0.34.2
+gevent>=25.0.0
+
+# External dependencies (not pip):
+# - wget2 2.2.1: brew install wget2
+# - httrack 3.49: brew install httrack
+# - node.js 23.x: brew install node
+# - puppeteer: npm install puppeteer (in project root)

@@ -140,3 +140,5 @@ build-aux/config.rpath
 
 # Downloads folder (cloned sites)
 downloads/
+.windsurfrules
+node_modules/

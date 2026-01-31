@@ -9,8 +9,10 @@ import threading
 import uuid
 import json
 import shutil
+import signal
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from flask import Flask, render_template, request, jsonify, send_from_directory, send_file
 from flask_socketio import SocketIO, emit
@@ -23,6 +25,8 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 BASE_DIR = Path(__file__).parent.parent
 WGET_PATH = os.environ.get('WGET_PATH', str(BASE_DIR / 'src' / 'wget'))
 WGET2_PATH = os.environ.get('WGET2_PATH', '/opt/homebrew/bin/wget2')
+HTTRACK_PATH = os.environ.get('HTTRACK_PATH', '/opt/homebrew/bin/httrack')
+PUPPETEER_SCRIPT = BASE_DIR / 'admin' / 'puppeteer-crawler.js'
 DOWNLOADS_DIR = BASE_DIR / 'downloads'
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 JOBS_FILE = BASE_DIR / 'admin' / 'jobs.json'
@@ -40,6 +44,7 @@ def save_jobs():
             'url': job.url,
             'options': job.options,
             'use_wget2': job.use_wget2,
+            'engine': job.engine,
             'status': job.status,
             'files_downloaded': job.files_downloaded,
             'total_size': job.total_size,
@@ -69,7 +74,8 @@ def load_jobs():
                 data['url'],
                 data['options'],
                 data['use_wget2'],
-                data['folder_name']
+                data['folder_name'],
+                data.get('engine', 'wget2')
             )
             job.status = data['status']
             job.files_downloaded = data['files_downloaded']
@@ -90,11 +96,12 @@ def load_jobs():
 
 
 class WgetJob:
-    def __init__(self, job_id, url, options, use_wget2=False, folder_name=None):
+    def __init__(self, job_id, url, options, use_wget2=False, folder_name=None, engine='wget2'):
         self.id = job_id
         self.url = url
         self.options = options
         self.use_wget2 = use_wget2
+        self.engine = engine  # 'wget', 'wget2', 'puppeteer', 'httrack'
         self.status = 'pending'
         self.progress = 0
         self.files_downloaded = 0
@@ -121,7 +128,8 @@ class WgetJob:
             'started_at': self.started_at.isoformat() if self.started_at else None,
             'finished_at': self.finished_at.isoformat() if self.finished_at else None,
             'output_dir': str(self.output_dir),
-            'use_wget2': self.use_wget2
+            'use_wget2': self.use_wget2,
+            'engine': self.engine
         }
 
 
@@ -282,6 +290,10 @@ def build_wget_command(job):
         cmd.append('--timestamping')
         cmd.append('--no-clobber')
     
+    # Always add no-clobber to prevent re-downloading existing files
+    if not opts.get('continue_download', False) and not opts.get('mirror_mode', False):
+        cmd.append('--no-clobber')
+    
     # Output directory
     cmd.extend(['-P', str(job.output_dir)])
     
@@ -294,8 +306,125 @@ def build_wget_command(job):
     return cmd
 
 
+def build_httrack_command(job):
+    """Build httrack command from job options"""
+    cmd = [HTTRACK_PATH]
+    opts = job.options
+    
+    # URL first
+    cmd.append(job.url)
+    
+    # Output directory
+    cmd.extend(['-O', str(job.output_dir)])
+    
+    # Depth
+    depth = opts.get('depth', 2)
+    cmd.extend(['-r' + str(depth)])
+    
+    # Include subdomains
+    if opts.get('include_subdomains', False):
+        cmd.append('-%e0')  # Follow external links on same domain
+    
+    # User agent
+    user_agent = opts.get('user_agent', '')
+    if user_agent:
+        cmd.extend(['-F', user_agent])
+    
+    # Rate limit
+    rate_limit = opts.get('rate_limit', '')
+    if rate_limit:
+        # Convert to bytes/sec for httrack
+        cmd.extend(['-%c', '1'])  # Max connections
+    
+    # Timeout
+    timeout = opts.get('timeout', 30)
+    cmd.extend(['-T', str(timeout)])
+    
+    # Retries
+    retries = opts.get('retries', 3)
+    cmd.extend(['-R', str(retries)])
+    
+    # Continue download
+    if opts.get('continue_download', False):
+        cmd.append('--continue')
+    
+    # Verbose output
+    cmd.append('-v')
+    
+    return cmd
+
+
+def build_puppeteer_command(job):
+    """Build puppeteer crawler command from job options"""
+    cmd = ['node', str(PUPPETEER_SCRIPT)]
+    opts = job.options
+    
+    # URL
+    cmd.append(job.url)
+    
+    # Output directory
+    cmd.append(str(job.output_dir))
+    
+    # Max pages
+    max_pages = opts.get('max_pages', 100)
+    cmd.append(str(max_pages))
+    
+    # Scroll for infinite scroll pages
+    if opts.get('js_scroll', True):
+        cmd.append('--scroll')
+    
+    # Click "Show More" buttons
+    if opts.get('js_click_more', True):
+        cmd.append('--click-more')
+    
+    # Wait time for JS rendering
+    wait_time = opts.get('js_wait', 2000)
+    cmd.append(f'--wait={wait_time}')
+    
+    # Depth
+    depth = opts.get('depth', 3)
+    cmd.append(f'--depth={depth}')
+    
+    return cmd
+
+
+def run_single_engine(job, engine_name, cmd):
+    """Run a single engine and return success status"""
+    job.output_lines.append(f"")
+    job.output_lines.append(f"{'='*50}")
+    job.output_lines.append(f"Running: {engine_name}")
+    job.output_lines.append(f"Command: {' '.join(cmd)}")
+    job.output_lines.append(f"{'='*50}")
+    
+    socketio.emit('job_update', job.to_dict())
+    
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+        job.process = process
+        
+        for line in iter(process.stdout.readline, ''):
+            line = line.strip()
+            if line:
+                job.output_lines.append(line)
+                
+                update_job_stats(job)
+                socketio.emit('job_update', job.to_dict())
+        
+        process.wait()
+        return process.returncode == 0
+    except Exception as e:
+        job.output_lines.append(f"Error in {engine_name}: {str(e)}")
+        return False
+
+
 def run_wget_job(job_id):
-    """Run wget job in background"""
+    """Run download job in background (supports multiple engines)"""
     job = jobs.get(job_id)
     if not job:
         return
@@ -303,7 +432,42 @@ def run_wget_job(job_id):
     job.status = 'running'
     job.started_at = datetime.now()
     
-    cmd = build_wget_command(job)
+    # Smart mode - run all engines sequentially
+    if job.engine == 'smart':
+        job.output_lines.append("SMART MODE: Running all engines for maximum coverage")
+        socketio.emit('job_update', job.to_dict())
+        save_jobs()
+        
+        # Step 1: wget2 for fast static content
+        cmd_wget2 = build_wget_command(job)
+        run_single_engine(job, "wget2 (static content)", cmd_wget2)
+        
+        # Step 2: Puppeteer for JS-rendered content
+        cmd_puppeteer = build_puppeteer_command(job)
+        run_single_engine(job, "Puppeteer (JS rendering)", cmd_puppeteer)
+        
+        # Step 3: httrack for anything missed
+        cmd_httrack = build_httrack_command(job)
+        run_single_engine(job, "HTTrack (final pass)", cmd_httrack)
+        
+        # Finish
+        job.status = 'completed'
+        job.finished_at = datetime.now()
+        job.output_lines.append("")
+        job.output_lines.append("SMART MODE COMPLETED - All engines finished")
+        socketio.emit('job_update', job.to_dict())
+        save_jobs()
+        return
+    
+    # Single engine mode
+    if job.engine == 'puppeteer':
+        cmd = build_puppeteer_command(job)
+    elif job.engine == 'httrack':
+        cmd = build_httrack_command(job)
+    else:
+        cmd = build_wget_command(job)
+    
+    job.output_lines.append(f"Engine: {job.engine}")
     job.output_lines.append(f"Command: {' '.join(cmd)}")
     
     socketio.emit('job_update', job.to_dict())
@@ -324,30 +488,14 @@ def run_wget_job(job_id):
             if line:
                 job.output_lines.append(line)
                 
-                # Parse progress info
-                if 'saved' in line.lower() or 'Saving' in line or 'saved' in line:
-                    job.files_downloaded += 1
-                
-                # Calculate current size
-                try:
-                    total_size = sum(f.stat().st_size for f in job.output_dir.rglob('*') if f.is_file())
-                    job.total_size = format_size(total_size)
-                    job.files_downloaded = sum(1 for _ in job.output_dir.rglob('*') if _.is_file())
-                except:
-                    pass
-                
-                # Emit update every line for real-time feedback
+                update_job_stats(job)
                 socketio.emit('job_update', job.to_dict())
         
         process.wait()
         
         job.status = 'completed' if process.returncode == 0 else 'failed'
         job.finished_at = datetime.now()
-        
-        # Calculate total size
-        total_size = sum(f.stat().st_size for f in job.output_dir.rglob('*') if f.is_file())
-        job.total_size = format_size(total_size)
-        job.files_downloaded = sum(1 for _ in job.output_dir.rglob('*') if _.is_file())
+        update_job_stats(job)
         
     except Exception as e:
         job.status = 'failed'
@@ -365,6 +513,58 @@ def format_size(size_bytes):
             return f"{size_bytes:.1f} {unit}"
         size_bytes /= 1024
     return f"{size_bytes:.1f} TB"
+
+
+def update_job_stats(job):
+    """Update job file count and total size"""
+    try:
+        files = list(job.output_dir.rglob('*'))
+        job.files_downloaded = sum(1 for f in files if f.is_file())
+        total_size = sum(f.stat().st_size for f in files if f.is_file())
+        job.total_size = format_size(total_size)
+    except:
+        pass
+
+
+def start_job_thread(job_id):
+    """Start job in background thread"""
+    thread = threading.Thread(target=run_wget_job, args=(job_id,))
+    thread.daemon = True
+    thread.start()
+
+
+def find_index_file(folder_path):
+    """Find index.html or first HTML file in folder"""
+    index_files = list(folder_path.rglob('index.html'))
+    if index_files:
+        return index_files[0]
+    html_files = list(folder_path.rglob('*.html'))
+    if html_files:
+        return html_files[0]
+    return None
+
+
+def extract_domain_from_url(url):
+    """Extract clean domain from URL"""
+    parsed = urlparse(url)
+    domain = parsed.netloc
+    if domain.startswith('www.'):
+        domain = domain[4:]
+    return domain
+
+
+def normalize_url(url):
+    """Normalize URL for duplicate comparison"""
+    parsed = urlparse(url)
+    # Remove www., trailing slash, default ports
+    domain = parsed.netloc.lower()
+    if domain.startswith('www.'):
+        domain = domain[4:]
+    # Remove default ports
+    domain = domain.replace(':80', '').replace(':443', '')
+    # Normalize path
+    path = parsed.path.rstrip('/') or '/'
+    return f"{parsed.scheme}://{domain}{path}"
 
 
 @app.route('/')
@@ -388,30 +588,33 @@ def create_job():
     if not url.startswith(('http://', 'https://')):
         url = 'https://' + url
     
+    # Normalize URL for duplicate check
+    normalized_url = normalize_url(url)
+    
+    # Check for duplicate: same URL already running or pending
+    for existing_job in jobs.values():
+        if existing_job.status in ('running', 'pending', 'paused'):
+            if normalize_url(existing_job.url) == normalized_url:
+                return jsonify({
+                    'error': 'This URL is already being downloaded',
+                    'existing_job_id': existing_job.id
+                }), 409
+    
     # Generate folder name from domain
-    from urllib.parse import urlparse
-    parsed = urlparse(url)
-    domain = parsed.netloc
-    # Remove www. prefix
-    if domain.startswith('www.'):
-        domain = domain[4:]
-    # Create unique folder name with timestamp
+    domain = extract_domain_from_url(url)
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     folder_name = f"{domain}_{timestamp}"
     
     job_id = str(uuid.uuid4())[:8]
     options = data.get('options', {})
     use_wget2 = data.get('use_wget2', False)
+    engine = data.get('engine', 'wget2' if use_wget2 else 'wget')
     
-    job = WgetJob(job_id, url, options, use_wget2, folder_name)
+    job = WgetJob(job_id, url, options, use_wget2, folder_name, engine)
     jobs[job_id] = job
     save_jobs()
     
-    # Start job in background
-    thread = threading.Thread(target=run_wget_job, args=(job_id,))
-    thread.daemon = True
-    thread.start()
-    
+    start_job_thread(job_id)
     return jsonify(job.to_dict())
 
 
@@ -460,7 +663,6 @@ def stop_job(job_id):
 @app.route('/api/jobs/<job_id>/pause', methods=['POST'])
 def pause_job(job_id):
     """Pause a running job using SIGSTOP"""
-    import signal
     job = jobs.get(job_id)
     if not job:
         return jsonify({'error': 'Job not found'}), 404
@@ -477,7 +679,6 @@ def pause_job(job_id):
 @app.route('/api/jobs/<job_id>/resume', methods=['POST'])
 def resume_job(job_id):
     """Resume a paused job using SIGCONT"""
-    import signal
     job = jobs.get(job_id)
     if not job:
         return jsonify({'error': 'Job not found'}), 404
@@ -502,9 +703,14 @@ def restart_job(job_id):
     if old_job.process and old_job.process.poll() is None:
         old_job.process.terminate()
     
-    # Create new job with same settings
+    # Get engine from request or use old job's engine
+    data = request.json or {}
+    engine = data.get('engine', old_job.engine)
+    use_wget2 = data.get('use_wget2', old_job.use_wget2)
+    
+    # Create new job with selected engine
     new_job_id = str(uuid.uuid4())[:8]
-    new_job = WgetJob(new_job_id, old_job.url, old_job.options.copy(), old_job.use_wget2, old_job.folder_name)
+    new_job = WgetJob(new_job_id, old_job.url, old_job.options.copy(), use_wget2, old_job.folder_name, engine)
     new_job.options['continue_download'] = True  # Resume mode
     jobs[new_job_id] = new_job
     
@@ -512,11 +718,7 @@ def restart_job(job_id):
     del jobs[job_id]
     save_jobs()
     
-    # Start new job
-    thread = threading.Thread(target=run_wget_job, args=(new_job_id,))
-    thread.daemon = True
-    thread.start()
-    
+    start_job_thread(new_job_id)
     return jsonify(new_job.to_dict())
 
 
@@ -571,13 +773,12 @@ def open_in_browser(job_id):
     if not job:
         return jsonify({'error': 'Job not found'}), 404
     
-    # Find index.html
-    index_files = list(job.output_dir.rglob('index.html'))
-    if index_files:
-        os.system(f'open "{index_files[0]}"')
-        return jsonify({'success': True, 'file': str(index_files[0])})
+    index_file = find_index_file(job.output_dir)
+    if index_file:
+        os.system(f'open "{index_file}"')
+        return jsonify({'success': True, 'file': str(index_file)})
     
-    return jsonify({'error': 'No index.html found'}), 404
+    return jsonify({'error': 'No HTML files found'}), 404
 
 
 @app.route('/api/jobs/<job_id>/open-folder')
@@ -620,12 +821,11 @@ def open_any_folder():
 def open_site_in_browser():
     path = request.args.get('path', '')
     if path and os.path.exists(path):
-        # Find index.html
-        index_files = list(Path(path).rglob('index.html'))
-        if index_files:
-            os.system(f'open "{index_files[0]}"')
-            return jsonify({'success': True, 'file': str(index_files[0])})
-        # If no index.html, just open folder
+        index_file = find_index_file(Path(path))
+        if index_file:
+            os.system(f'open "{index_file}"')
+            return jsonify({'success': True, 'file': str(index_file)})
+        # If no HTML files, just open folder
         os.system(f'open "{path}"')
         return jsonify({'success': True, 'opened': 'folder'})
     return jsonify({'error': 'Path not found'}), 404
@@ -679,7 +879,6 @@ def browse_download(filepath):
 @app.route('/api/downloads/<folder_name>', methods=['DELETE'])
 def delete_download(folder_name):
     """Delete a downloaded folder"""
-    import shutil
     folder_path = DOWNLOADS_DIR / folder_name
     if not folder_path.exists():
         return jsonify({'error': 'Folder not found'}), 404
@@ -718,16 +917,13 @@ def continue_download(folder_name):
     
     use_wget2 = data.get('use_wget2', False)
     
+    engine = data.get('engine', 'smart')
     job_id = str(uuid.uuid4())[:8]
-    job = WgetJob(job_id, url, options, use_wget2, folder_name)
-    job.options['continue_download'] = True  # Flag for continue mode
+    job = WgetJob(job_id, url, options, use_wget2, folder_name, engine)
+    job.options['continue_download'] = True
     jobs[job_id] = job
     
-    # Start job in background
-    thread = threading.Thread(target=run_wget_job, args=(job_id,))
-    thread.daemon = True
-    thread.start()
-    
+    start_job_thread(job_id)
     return jsonify(job.to_dict())
 
 
@@ -761,16 +957,13 @@ def restart_download(folder_name):
     })
     
     use_wget2 = data.get('use_wget2', True)
+    engine = data.get('engine', 'smart')
     
     job_id = str(uuid.uuid4())[:8]
-    job = WgetJob(job_id, url, options, use_wget2, folder_name)
+    job = WgetJob(job_id, url, options, use_wget2, folder_name, engine)
     jobs[job_id] = job
     
-    # Start job in background
-    thread = threading.Thread(target=run_wget_job, args=(job_id,))
-    thread.daemon = True
-    thread.start()
-    
+    start_job_thread(job_id)
     return jsonify(job.to_dict())
 
 
@@ -782,23 +975,15 @@ def get_active_jobs():
 
 
 @app.route('/api/find-index/<folder_name>')
-def find_index_html(folder_name):
+def find_index_html_api(folder_name):
     """Find index.html in a download folder"""
     folder_path = DOWNLOADS_DIR / folder_name
     if not folder_path.exists():
         return jsonify({'error': 'Folder not found'}), 404
     
-    # Search for index.html
-    index_files = list(folder_path.rglob('index.html'))
-    if index_files:
-        # Return the first one, relative to downloads dir
-        rel_path = index_files[0].relative_to(DOWNLOADS_DIR)
-        return jsonify({'path': str(rel_path)})
-    
-    # No index.html found, return first HTML file
-    html_files = list(folder_path.rglob('*.html'))
-    if html_files:
-        rel_path = html_files[0].relative_to(DOWNLOADS_DIR)
+    index_file = find_index_file(folder_path)
+    if index_file:
+        rel_path = index_file.relative_to(DOWNLOADS_DIR)
         return jsonify({'path': str(rel_path)})
     
     return jsonify({'error': 'No HTML files found'}), 404
