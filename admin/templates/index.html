@@ -228,19 +228,55 @@
                 </div>
 
                 <!-- Wget Version Toggle -->
-                <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                    <div class="flex items-center">
-                        <span class="text-sm text-gray-700 mr-3">Engine:</span>
-                        <label class="inline-flex items-center cursor-pointer">
-                            <input type="checkbox" id="useWget2" class="sr-only peer">
-                            <div class="relative w-11 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-purple-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
-                            <span class="ms-3 text-sm font-medium text-gray-700" id="wgetVersionLabel">wget</span>
-                        </label>
+                <div class="p-3 bg-gray-50 rounded-lg">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center">
+                            <span class="text-sm text-gray-700 mr-3">Engine:</span>
+                            <label class="inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="useWget2" checked class="sr-only peer">
+                                <div class="relative w-11 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-purple-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                                <span class="ms-3 text-sm font-medium text-gray-700" id="wgetVersionLabel">wget2</span>
+                            </label>
+                        </div>
+                        <div id="wget2Badge" class="">
+                            <span class="px-2 py-1 text-xs bg-green-100 text-green-700 rounded-full">
+                                <i class="fas fa-bolt mr-1"></i>HTTP/2, Multi-thread, Brotli
+                            </span>
+                        </div>
                     </div>
-                    <div id="wget2Badge" class="hidden">
-                        <span class="px-2 py-1 text-xs bg-green-100 text-green-700 rounded-full">
-                            <i class="fas fa-bolt mr-1"></i>HTTP/2, Multi-thread, Brotli
-                        </span>
+                    <!-- wget2 specific options -->
+                    <div id="wget2Options" class="mt-3 pt-3 border-t border-gray-200">
+                        <div class="grid grid-cols-2 gap-3">
+                            <div class="bg-purple-50 rounded-lg p-3">
+                                <label class="block text-xs text-purple-600 font-medium mb-1">Parallel threads</label>
+                                <input type="number" id="parallelThreads" value="10" min="1" max="20"
+                                       class="w-full border border-purple-200 rounded px-3 py-2 text-sm bg-white">
+                            </div>
+                            <div class="bg-purple-50 rounded-lg p-3">
+                                <label class="block text-xs text-purple-600 font-medium mb-1">Chunk size (for large files)</label>
+                                <select id="chunkSize" class="w-full border border-purple-200 rounded px-3 py-2 text-sm bg-white">
+                                    <option value="">Disabled</option>
+                                    <option value="1M">1 MB</option>
+                                    <option value="5M">5 MB</option>
+                                    <option value="10M">10 MB</option>
+                                </select>
+                            </div>
+                            <div class="bg-purple-50 rounded-lg p-3">
+                                <label class="block text-xs text-purple-600 font-medium mb-1">HTTP/2 window</label>
+                                <input type="number" id="http2Window" value="30" min="1" max="100"
+                                       class="w-full border border-purple-200 rounded px-3 py-2 text-sm bg-white">
+                            </div>
+                            <div class="bg-purple-50 rounded-lg p-3 flex items-center justify-between">
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="progressBar" checked class="w-4 h-4 text-purple-600 rounded">
+                                    <label for="progressBar" class="ml-2 text-sm text-gray-700">Progress bar</label>
+                                </div>
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="metalink" class="w-4 h-4 text-purple-600 rounded">
+                                    <label for="metalink" class="ml-2 text-sm text-gray-700">Metalink</label>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -253,11 +289,23 @@
             </form>
         </div>
 
+        <!-- Active Downloads Section -->
+        <div id="activeDownloadsSection" class="bg-gradient-to-r from-purple-600 to-indigo-600 rounded-xl card-shadow p-6 mb-8 hidden">
+            <h2 class="text-xl font-semibold text-white mb-4 flex items-center">
+                <i class="fas fa-download text-white mr-2 pulse"></i>
+                Active Downloads
+                <span id="activeCount" class="ml-2 px-2 py-0.5 bg-white/20 rounded-full text-sm">(0)</span>
+            </h2>
+            
+            <div id="activeDownloadsList" class="space-y-3">
+            </div>
+        </div>
+
         <!-- Jobs List -->
         <div class="bg-white rounded-xl card-shadow p-6 mb-8">
             <h2 class="text-xl font-semibold text-gray-800 mb-4">
                 <i class="fas fa-tasks text-purple-600 mr-2"></i>
-                Jobs
+                Jobs History
                 <span id="jobCount" class="text-sm font-normal text-gray-500 ml-2">(0)</span>
             </h2>
             
@@ -353,8 +401,17 @@
                     <button class="btn-download hidden px-3 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 text-sm">
                         <i class="fas fa-download mr-1"></i> Download
                     </button>
+                    <button class="btn-pause hidden px-3 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 text-sm">
+                        <i class="fas fa-pause mr-1"></i> Pause
+                    </button>
+                    <button class="btn-resume hidden px-3 py-1 bg-green-100 text-green-700 rounded hover:bg-green-200 text-sm">
+                        <i class="fas fa-play mr-1"></i> Resume
+                    </button>
                     <button class="btn-stop hidden px-3 py-1 bg-yellow-100 text-yellow-700 rounded hover:bg-yellow-200 text-sm">
                         <i class="fas fa-stop mr-1"></i> Stop
+                    </button>
+                    <button class="btn-restart hidden px-3 py-1 bg-orange-100 text-orange-700 rounded hover:bg-orange-200 text-sm">
+                        <i class="fas fa-redo mr-1"></i> Restart
                     </button>
                     <button class="btn-delete px-3 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 text-sm">
                         <i class="fas fa-trash mr-1"></i>
@@ -402,6 +459,12 @@
         socket.on('job_update', (job) => {
             jobs.set(job.id, job);
             updateJobUI(job);
+            updateActiveDownloads();
+            
+            // Refresh downloads list when job completes
+            if (job.status === 'completed' || job.status === 'failed' || job.status === 'stopped') {
+                loadDownloads();
+            }
         });
         
         // Load existing jobs
@@ -414,6 +477,7 @@
                     updateJobUI(job);
                 });
                 updateJobCount();
+                updateActiveDownloads();
             } catch (error) {
                 console.error('Failed to load jobs:', error);
             }
@@ -453,7 +517,13 @@
                 restrict_file_names: document.getElementById('restrictFileNames').checked,
                 trust_server_names: document.getElementById('trustServerNames').checked,
                 include_subdomains: document.getElementById('includeSubdomains').checked,
-                extra_domains: document.getElementById('extraDomains').value
+                extra_domains: document.getElementById('extraDomains').value,
+                // wget2 specific options
+                parallel_threads: parseInt(document.getElementById('parallelThreads').value) || 10,
+                chunk_size: document.getElementById('chunkSize').value,
+                http2_window: parseInt(document.getElementById('http2Window').value) || 30,
+                progress_bar: document.getElementById('progressBar').checked,
+                metalink: document.getElementById('metalink').checked
             };
             
             const useWget2 = document.getElementById('useWget2').checked;
@@ -473,7 +543,7 @@
                 document.getElementById('urlInput').value = '';
             } catch (error) {
                 console.error('Failed to create job:', error);
-                alert('Failed to create job');
+                alert('Ошибка создания задачи');
             }
         });
         
@@ -492,6 +562,9 @@
                 
                 card.querySelector('.btn-delete').addEventListener('click', () => deleteJob(job.id));
                 card.querySelector('.btn-stop').addEventListener('click', () => stopJob(job.id));
+                card.querySelector('.btn-pause').addEventListener('click', () => pauseJob(job.id));
+                card.querySelector('.btn-resume').addEventListener('click', () => resumeJob(job.id));
+                card.querySelector('.btn-restart').addEventListener('click', () => restartJob(job.id));
                 card.querySelector('.btn-download').addEventListener('click', () => downloadJob(job.id));
                 card.querySelector('.btn-open').addEventListener('click', () => openJob(job.id));
                 card.querySelector('.btn-folder').addEventListener('click', () => openJobFolder(job.id));
@@ -530,36 +603,53 @@
             // Status icon
             const statusIcon = card.querySelector('.job-status-icon');
             const btnStop = card.querySelector('.btn-stop');
+            const btnPause = card.querySelector('.btn-pause');
+            const btnResume = card.querySelector('.btn-resume');
+            const btnRestart = card.querySelector('.btn-restart');
             const btnDownload = card.querySelector('.btn-download');
             const btnOpen = card.querySelector('.btn-open');
             const progressDiv = card.querySelector('.job-progress');
             
+            // Reset all buttons
+            btnStop.classList.add('hidden');
+            btnPause.classList.add('hidden');
+            btnResume.classList.add('hidden');
+            btnRestart.classList.add('hidden');
+            btnDownload.classList.add('hidden');
+            btnOpen.classList.add('hidden');
+            progressDiv.classList.add('hidden');
+            
             switch (job.status) {
                 case 'pending':
                     statusIcon.innerHTML = '<i class="fas fa-clock text-yellow-500"></i>';
+                    btnStop.classList.remove('hidden');
                     break;
                 case 'running':
                     statusIcon.innerHTML = '<i class="fas fa-spinner fa-spin text-blue-500"></i>';
+                    btnPause.classList.remove('hidden');
+                    btnStop.classList.remove('hidden');
+                    progressDiv.classList.remove('hidden');
+                    break;
+                case 'paused':
+                    statusIcon.innerHTML = '<i class="fas fa-pause-circle text-blue-500"></i>';
+                    btnResume.classList.remove('hidden');
                     btnStop.classList.remove('hidden');
                     progressDiv.classList.remove('hidden');
                     break;
                 case 'completed':
                     statusIcon.innerHTML = '<i class="fas fa-check-circle text-green-500"></i>';
-                    btnStop.classList.add('hidden');
                     btnDownload.classList.remove('hidden');
                     btnOpen.classList.remove('hidden');
-                    progressDiv.classList.add('hidden');
+                    btnRestart.classList.remove('hidden');
                     break;
                 case 'failed':
                     statusIcon.innerHTML = '<i class="fas fa-times-circle text-red-500"></i>';
-                    btnStop.classList.add('hidden');
-                    progressDiv.classList.add('hidden');
+                    btnRestart.classList.remove('hidden');
                     break;
                 case 'stopped':
                     statusIcon.innerHTML = '<i class="fas fa-stop-circle text-yellow-500"></i>';
-                    btnStop.classList.add('hidden');
                     btnDownload.classList.remove('hidden');
-                    progressDiv.classList.add('hidden');
+                    btnRestart.classList.remove('hidden');
                     break;
             }
             
@@ -587,7 +677,7 @@
         }
         
         async function deleteJob(jobId) {
-            if (!confirm('Delete this job?')) return;
+            if (!confirm('Удалить эту задачу?')) return;
             
             try {
                 await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' });
@@ -613,6 +703,38 @@
                 await fetch(`/api/jobs/${jobId}/stop`, { method: 'POST' });
             } catch (error) {
                 console.error('Failed to stop job:', error);
+            }
+        }
+        
+        async function pauseJob(jobId) {
+            try {
+                await fetch(`/api/jobs/${jobId}/pause`, { method: 'POST' });
+            } catch (error) {
+                console.error('Failed to pause job:', error);
+            }
+        }
+        
+        async function resumeJob(jobId) {
+            try {
+                await fetch(`/api/jobs/${jobId}/resume`, { method: 'POST' });
+            } catch (error) {
+                console.error('Failed to resume job:', error);
+            }
+        }
+        
+        async function restartJob(jobId) {
+            if (!confirm('Perезапустить задачу? Текущие файлы будут сохранены.')) return;
+            try {
+                const response = await fetch(`/api/jobs/${jobId}/restart`, { method: 'POST' });
+                if (response.ok) {
+                    const job = await response.json();
+                    jobs.set(job.id, job);
+                    updateJobUI(job);
+                    updateActiveDownloads();
+                }
+            } catch (error) {
+                console.error('Failed to restart job:', error);
+                alert('Ошибка перезапуска задачи');
             }
         }
         
@@ -679,12 +801,15 @@
         document.getElementById('useWget2').addEventListener('change', function() {
             const label = document.getElementById('wgetVersionLabel');
             const badge = document.getElementById('wget2Badge');
+            const wget2Options = document.getElementById('wget2Options');
             if (this.checked) {
                 label.textContent = 'wget2';
                 badge.classList.remove('hidden');
+                wget2Options.classList.remove('hidden');
             } else {
                 label.textContent = 'wget';
                 badge.classList.add('hidden');
+                wget2Options.classList.add('hidden');
             }
         });
         
@@ -722,11 +847,19 @@
                     return;
                 }
                 
-                container.innerHTML = downloads.map(d => `
-                    <div class="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                container.innerHTML = downloads.map(d => {
+                    const isActive = d.is_active;
+                    const statusBadge = isActive 
+                        ? '<span class="ml-2 px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full animate-pulse"><i class="fas fa-spinner fa-spin mr-1"></i>Downloading</span>'
+                        : '';
+                    const borderClass = isActive ? 'border-blue-400 border-2 bg-blue-50' : 'border-gray-200';
+                    return `
+                    <div class="${borderClass} rounded-lg p-4 hover:shadow-md transition-shadow">
                         <div class="flex items-start justify-between">
                             <div class="flex-1 min-w-0">
-                                <h3 class="font-medium text-gray-800 truncate" title="${d.name}">${d.name}</h3>
+                                <h3 class="font-medium text-gray-800 truncate" title="${d.name}">
+                                    ${d.name}${statusBadge}
+                                </h3>
                                 <div class="text-sm text-gray-500 mt-1">
                                     <span><i class="fas fa-file mr-1"></i>${d.files} files</span>
                                     <span class="ml-3"><i class="fas fa-database mr-1"></i>${d.size}</span>
@@ -737,24 +870,29 @@
                             </div>
                         </div>
                         <div class="flex items-center space-x-2 mt-3">
-                            <button onclick="openDownloadFolder('${d.path}')" class="flex-1 px-3 py-1.5 bg-purple-100 text-purple-700 rounded hover:bg-purple-200 text-sm">
-                                <i class="fas fa-folder-open mr-1"></i> Folder
+                            <button onclick="openDownloadFolder('${d.path}')" class="px-2 py-1.5 bg-purple-100 text-purple-700 rounded hover:bg-purple-200 text-sm" title="Open folder">
+                                <i class="fas fa-folder-open"></i>
                             </button>
-                            <button onclick="openViewer('${d.name}')" class="flex-1 px-3 py-1.5 bg-green-100 text-green-700 rounded hover:bg-green-200 text-sm">
-                                <i class="fas fa-eye mr-1"></i> View
+                            <button onclick="openViewer('${d.name}')" class="px-2 py-1.5 bg-green-100 text-green-700 rounded hover:bg-green-200 text-sm" title="View site">
+                                <i class="fas fa-eye"></i>
                             </button>
                             <button onclick="openDownloadInBrowser('${d.path}')" class="px-2 py-1.5 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 text-sm" title="Open in browser">
                                 <i class="fas fa-external-link-alt"></i>
                             </button>
-                            <button onclick="redownload('${d.name}')" class="px-2 py-1.5 bg-yellow-100 text-yellow-700 rounded hover:bg-yellow-200 text-sm" title="Re-download">
+                            ${!isActive ? `
+                            <button onclick="continueDownload('${d.name}')" class="px-2 py-1.5 bg-yellow-100 text-yellow-700 rounded hover:bg-yellow-200 text-sm" title="Continue download">
+                                <i class="fas fa-play"></i>
+                            </button>
+                            <button onclick="restartDownload('${d.name}')" class="px-2 py-1.5 bg-orange-100 text-orange-700 rounded hover:bg-orange-200 text-sm" title="Restart from scratch">
                                 <i class="fas fa-redo"></i>
                             </button>
+                            ` : ''}
                             <button onclick="deleteDownload('${d.name}')" class="px-2 py-1.5 bg-red-100 text-red-700 rounded hover:bg-red-200 text-sm" title="Delete">
                                 <i class="fas fa-trash"></i>
                             </button>
                         </div>
                     </div>
-                `).join('');
+                `}).join('');
             } catch (error) {
                 console.error('Failed to load downloads:', error);
                 document.getElementById('downloadsList').innerHTML = `
@@ -783,7 +921,7 @@
         }
         
         async function deleteDownload(folderName) {
-            if (!confirm(`Delete "${folderName}"? This cannot be undone.`)) {
+            if (!confirm(`Удалить "${folderName}"? Это действие нельзя отменить.`)) {
                 return;
             }
             
@@ -796,12 +934,116 @@
                     loadDownloads(); // Refresh the list
                 } else {
                     const data = await response.json();
-                    alert('Failed to delete: ' + (data.error || 'Unknown error'));
+                    alert('Ошибка удаления: ' + (data.error || 'Неизвестная ошибка'));
                 }
             } catch (error) {
                 console.error('Failed to delete download:', error);
-                alert('Failed to delete folder');
+                alert('Ошибка удаления папки');
             }
+        }
+        
+        async function continueDownload(folderName) {
+            if (!confirm(`Продолжить загрузку "${folderName}"? Будут докачаны недостающие файлы.`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/downloads/${encodeURIComponent(folderName)}/continue`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ use_wget2: false })
+                });
+                
+                if (response.ok) {
+                    const job = await response.json();
+                    jobs.set(job.id, job);
+                    updateJobUI(job);
+                    updateActiveDownloads();
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                } else {
+                    const data = await response.json();
+                    alert('Ошибка: ' + (data.error || 'Неизвестная ошибка'));
+                }
+            } catch (error) {
+                console.error('Failed to continue download:', error);
+                alert('Ошибка продолжения загрузки');
+            }
+        }
+        
+        async function restartDownload(folderName) {
+            if (!confirm(`Перекачать "${folderName}" заново? Все файлы будут УДАЛЕНЫ и скачаны заново.`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/downloads/${encodeURIComponent(folderName)}/restart`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ use_wget2: true })
+                });
+                
+                if (response.ok) {
+                    const job = await response.json();
+                    jobs.set(job.id, job);
+                    updateJobUI(job);
+                    updateActiveDownloads();
+                    loadDownloads();
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                } else {
+                    const data = await response.json();
+                    alert('Ошибка: ' + (data.error || 'Неизвестная ошибка'));
+                }
+            } catch (error) {
+                console.error('Failed to restart download:', error);
+                alert('Ошибка перезапуска загрузки');
+            }
+        }
+        
+        // Update active downloads display
+        function updateActiveDownloads() {
+            const activeJobs = Array.from(jobs.values()).filter(j => j.status === 'running' || j.status === 'pending' || j.status === 'paused');
+            const section = document.getElementById('activeDownloadsSection');
+            const list = document.getElementById('activeDownloadsList');
+            const count = document.getElementById('activeCount');
+            
+            count.textContent = `(${activeJobs.length})`;
+            
+            if (activeJobs.length === 0) {
+                section.classList.add('hidden');
+                return;
+            }
+            
+            section.classList.remove('hidden');
+            
+            list.innerHTML = activeJobs.map(job => {
+                const isPaused = job.status === 'paused';
+                const statusIcon = isPaused ? 'fa-pause' : 'fa-spinner fa-spin';
+                const pauseBtn = isPaused 
+                    ? `<button onclick="resumeJob('${job.id}')" class="px-2 py-1 bg-green-500/80 text-white rounded hover:bg-green-600 text-sm" title="Resume"><i class="fas fa-play"></i></button>`
+                    : `<button onclick="pauseJob('${job.id}')" class="px-2 py-1 bg-blue-500/80 text-white rounded hover:bg-blue-600 text-sm" title="Pause"><i class="fas fa-pause"></i></button>`;
+                return `
+                <div class="bg-white/10 backdrop-blur rounded-lg p-4" data-active-job="${job.id}">
+                    <div class="flex items-center justify-between mb-2">
+                        <div class="flex items-center space-x-3">
+                            <i class="fas ${statusIcon} text-white"></i>
+                            <span class="text-white font-medium truncate max-w-md">${job.url}</span>
+                            ${isPaused ? '<span class="px-2 py-0.5 bg-blue-500/50 text-white text-xs rounded">PAUSED</span>' : ''}
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <span class="text-white/80 text-sm">${job.files_downloaded} files</span>
+                            <span class="text-white/80 text-sm">${job.total_size}</span>
+                            ${pauseBtn}
+                            <button onclick="stopJob('${job.id}')" class="px-2 py-1 bg-red-500/80 text-white rounded hover:bg-red-600 text-sm" title="Stop">
+                                <i class="fas fa-stop"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="w-full bg-white/20 rounded-full h-2">
+                        <div class="bg-white h-2 rounded-full transition-all duration-300" style="width: ${Math.min(job.files_downloaded * 2, 100)}%"></div>
+                    </div>
+                    <div class="mt-2 text-white/60 text-xs truncate">${job.output_lines.slice(-1)[0] || 'Starting...'}</div>
+                </div>
+            `}).join('');
         }
         
         async function redownload(folderName) {
@@ -851,6 +1093,12 @@
             document.getElementById('useWget2').checked = false;
             document.getElementById('wgetVersionLabel').textContent = 'wget';
             document.getElementById('wget2Badge').classList.add('hidden');
+            document.getElementById('wget2Options').classList.add('hidden');
+            document.getElementById('parallelThreads').value = 10;
+            document.getElementById('chunkSize').value = '';
+            document.getElementById('http2Window').value = 30;
+            document.getElementById('progressBar').checked = true;
+            document.getElementById('metalink').checked = false;
             
             switch(preset) {
                 case 'quick':
@@ -862,6 +1110,8 @@
                     document.getElementById('useWget2').checked = true;
                     document.getElementById('wgetVersionLabel').textContent = 'wget2';
                     document.getElementById('wget2Badge').classList.remove('hidden');
+                    document.getElementById('wget2Options').classList.remove('hidden');
+                    document.getElementById('parallelThreads').value = 15;
                     break;
                     
                 case 'full':
@@ -874,6 +1124,10 @@
                     document.getElementById('useWget2').checked = true;
                     document.getElementById('wgetVersionLabel').textContent = 'wget2';
                     document.getElementById('wget2Badge').classList.remove('hidden');
+                    document.getElementById('wget2Options').classList.remove('hidden');
+                    document.getElementById('parallelThreads').value = 20;
+                    document.getElementById('chunkSize').value = '5M';
+                    document.getElementById('http2Window').value = 50;
                     break;
                     
                 case 'stealth':
@@ -909,11 +1163,11 @@
                     loadInViewer(`/api/browse/${data.path}`);
                     document.getElementById('viewerModal').classList.remove('hidden');
                 } else {
-                    alert('No HTML files found in this folder');
+                    alert('HTML файлы не найдены в этой папке');
                 }
             } catch (error) {
                 console.error('Failed to open viewer:', error);
-                alert('Failed to open viewer');
+                alert('Ошибка открытия просмотрщика');
             }
         }
         

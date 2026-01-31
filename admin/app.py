@@ -25,9 +25,68 @@ WGET_PATH = os.environ.get('WGET_PATH', str(BASE_DIR / 'src' / 'wget'))
 WGET2_PATH = os.environ.get('WGET2_PATH', '/opt/homebrew/bin/wget2')
 DOWNLOADS_DIR = BASE_DIR / 'downloads'
 DOWNLOADS_DIR.mkdir(exist_ok=True)
+JOBS_FILE = BASE_DIR / 'admin' / 'jobs.json'
 
 # Store active jobs
 jobs = {}
+
+
+def save_jobs():
+    """Save jobs to JSON file for persistence"""
+    jobs_data = {}
+    for job_id, job in jobs.items():
+        jobs_data[job_id] = {
+            'id': job.id,
+            'url': job.url,
+            'options': job.options,
+            'use_wget2': job.use_wget2,
+            'status': job.status,
+            'files_downloaded': job.files_downloaded,
+            'total_size': job.total_size,
+            'output_lines': job.output_lines[-100:],  # Last 100 lines
+            'started_at': job.started_at.isoformat() if job.started_at else None,
+            'finished_at': job.finished_at.isoformat() if job.finished_at else None,
+            'folder_name': job.folder_name
+        }
+    try:
+        with open(JOBS_FILE, 'w') as f:
+            json.dump(jobs_data, f, indent=2)
+    except Exception as e:
+        print(f"Error saving jobs: {e}")
+
+
+def load_jobs():
+    """Load jobs from JSON file on startup"""
+    global jobs
+    if not JOBS_FILE.exists():
+        return
+    try:
+        with open(JOBS_FILE, 'r') as f:
+            jobs_data = json.load(f)
+        for job_id, data in jobs_data.items():
+            job = WgetJob(
+                data['id'],
+                data['url'],
+                data['options'],
+                data['use_wget2'],
+                data['folder_name']
+            )
+            job.status = data['status']
+            job.files_downloaded = data['files_downloaded']
+            job.total_size = data['total_size']
+            job.output_lines = data['output_lines']
+            if data['started_at']:
+                job.started_at = datetime.fromisoformat(data['started_at'])
+            if data['finished_at']:
+                job.finished_at = datetime.fromisoformat(data['finished_at'])
+            # Mark running jobs as stopped (server restarted)
+            if job.status in ('running', 'pending', 'paused'):
+                job.status = 'stopped'
+                job.finished_at = datetime.now()
+            jobs[job_id] = job
+        print(f"Loaded {len(jobs)} jobs from file")
+    except Exception as e:
+        print(f"Error loading jobs: {e}")
 
 
 class WgetJob:
@@ -70,6 +129,33 @@ def build_wget_command(job):
     """Build wget command from job options"""
     if job.use_wget2:
         cmd = [WGET2_PATH]
+        # wget2-specific optimizations (all verified options)
+        cmd.append('--http2')  # Enable HTTP/2
+        cmd.append('--compression=br,gzip,zstd')  # All compression types
+        cmd.append('--tcp-fastopen')  # TCP Fast Open
+        cmd.append('--dns-cache')  # DNS caching
+        cmd.append('--hsts')  # HTTP Strict Transport Security
+        
+        # Progress bar style
+        if job.options.get('progress_bar', True):
+            cmd.append('--progress=bar')
+        
+        # Metalink support for mirrors
+        if job.options.get('metalink', False):
+            cmd.append('--metalink')
+        
+        # Parallel threads (default 5, max 20)
+        threads = job.options.get('parallel_threads', 10)
+        cmd.extend(['--max-threads', str(threads)])
+        
+        # HTTP/2 request window for parallel requests
+        http2_window = job.options.get('http2_window', 30)
+        cmd.extend(['--http2-request-window', str(http2_window)])
+        
+        # Chunk size for parallel download of single files
+        chunk_size = job.options.get('chunk_size', '')
+        if chunk_size:
+            cmd.extend(['--chunk-size', chunk_size])
     else:
         cmd = [WGET_PATH]
     opts = job.options
@@ -92,9 +178,8 @@ def build_wget_command(job):
     if opts.get('adjust_extensions', True):
         cmd.append('-E')
     
-    # Span hosts (for external resources)
-    if opts.get('span_hosts', False):
-        cmd.append('-H')
+    # Collect all domains for -D option
+    domains_list = []
     
     # Include subdomains - extract domain from URL and add wildcard
     if opts.get('include_subdomains', False):
@@ -104,13 +189,28 @@ def build_wget_command(job):
         # Remove www. prefix if present
         if domain.startswith('www.'):
             domain = domain[4:]
-        # Add domain filter to include all subdomains
-        cmd.extend(['-D', f'.{domain},{domain}'])
+        # Add base domain and wildcard for subdomains
+        domains_list.append(domain)
+        domains_list.append(f'.{domain}')
+        # Also add www variant
+        domains_list.append(f'www.{domain}')
     
     # Additional domains to include
     extra_domains = opts.get('extra_domains', '')
     if extra_domains:
-        cmd.extend(['-D', extra_domains])
+        # Split by comma and add each domain
+        for d in extra_domains.split(','):
+            d = d.strip()
+            if d:
+                domains_list.append(d)
+    
+    # Apply -D option with all collected domains
+    if domains_list:
+        cmd.extend(['-D', ','.join(domains_list)])
+    
+    # Span hosts - required for subdomains to work, auto-enable if subdomains requested
+    if opts.get('span_hosts', False) or opts.get('include_subdomains', False):
+        cmd.append('-H')
     
     # No parent (don't go up directories)
     if opts.get('no_parent', True):
@@ -163,8 +263,11 @@ def build_wget_command(job):
     
     # Ignore robots.txt
     if opts.get('ignore_robots', False):
-        cmd.append('-e')
-        cmd.append('robots=off')
+        if job.use_wget2:
+            cmd.append('--robots=off')
+        else:
+            cmd.append('-e')
+            cmd.append('robots=off')
     
     # No cookies (each page as new visit)
     if opts.get('no_cookies', False):
@@ -173,6 +276,11 @@ def build_wget_command(job):
     # Mirror mode (recursive + timestamps + infinite depth)
     if opts.get('mirror_mode', False):
         cmd.append('--mirror')
+    
+    # Continue/resume download (timestamping + no-clobber)
+    if opts.get('continue_download', False):
+        cmd.append('--timestamping')
+        cmd.append('--no-clobber')
     
     # Output directory
     cmd.extend(['-P', str(job.output_dir)])
@@ -199,6 +307,7 @@ def run_wget_job(job_id):
     job.output_lines.append(f"Command: {' '.join(cmd)}")
     
     socketio.emit('job_update', job.to_dict())
+    save_jobs()
     
     try:
         process = subprocess.Popen(
@@ -246,6 +355,7 @@ def run_wget_job(job_id):
         job.finished_at = datetime.now()
     
     socketio.emit('job_update', job.to_dict())
+    save_jobs()
 
 
 def format_size(size_bytes):
@@ -295,6 +405,7 @@ def create_job():
     
     job = WgetJob(job_id, url, options, use_wget2, folder_name)
     jobs[job_id] = job
+    save_jobs()
     
     # Start job in background
     thread = threading.Thread(target=run_wget_job, args=(job_id,))
@@ -327,6 +438,7 @@ def delete_job(job_id):
         shutil.rmtree(job.output_dir)
     
     del jobs[job_id]
+    save_jobs()
     return jsonify({'success': True})
 
 
@@ -340,8 +452,72 @@ def stop_job(job_id):
         job.process.terminate()
         job.status = 'stopped'
         job.finished_at = datetime.now()
+        save_jobs()
     
     return jsonify(job.to_dict())
+
+
+@app.route('/api/jobs/<job_id>/pause', methods=['POST'])
+def pause_job(job_id):
+    """Pause a running job using SIGSTOP"""
+    import signal
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    if job.process and job.process.poll() is None and job.status == 'running':
+        job.process.send_signal(signal.SIGSTOP)
+        job.status = 'paused'
+        socketio.emit('job_update', job.to_dict())
+        save_jobs()
+    
+    return jsonify(job.to_dict())
+
+
+@app.route('/api/jobs/<job_id>/resume', methods=['POST'])
+def resume_job(job_id):
+    """Resume a paused job using SIGCONT"""
+    import signal
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    if job.process and job.process.poll() is None and job.status == 'paused':
+        job.process.send_signal(signal.SIGCONT)
+        job.status = 'running'
+        socketio.emit('job_update', job.to_dict())
+        save_jobs()
+    
+    return jsonify(job.to_dict())
+
+
+@app.route('/api/jobs/<job_id>/restart', methods=['POST'])
+def restart_job(job_id):
+    """Restart a job with same URL and options"""
+    old_job = jobs.get(job_id)
+    if not old_job:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Stop if still running
+    if old_job.process and old_job.process.poll() is None:
+        old_job.process.terminate()
+    
+    # Create new job with same settings
+    new_job_id = str(uuid.uuid4())[:8]
+    new_job = WgetJob(new_job_id, old_job.url, old_job.options.copy(), old_job.use_wget2, old_job.folder_name)
+    new_job.options['continue_download'] = True  # Resume mode
+    jobs[new_job_id] = new_job
+    
+    # Remove old job
+    del jobs[job_id]
+    save_jobs()
+    
+    # Start new job
+    thread = threading.Thread(target=run_wget_job, args=(new_job_id,))
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify(new_job.to_dict())
 
 
 @app.route('/api/jobs/<job_id>/files')
@@ -458,6 +634,12 @@ def open_site_in_browser():
 @app.route('/api/downloads')
 def list_downloads():
     """List all downloaded folders in downloads directory"""
+    # Get list of folders currently being downloaded
+    active_folders = set()
+    for job in jobs.values():
+        if job.status in ('running', 'pending', 'paused'):
+            active_folders.add(job.folder_name)
+    
     downloads = []
     for item in DOWNLOADS_DIR.iterdir():
         if item.is_dir():
@@ -469,12 +651,18 @@ def list_downloads():
             # Get modification time
             mtime = datetime.fromtimestamp(item.stat().st_mtime)
             
+            # Check if currently downloading
+            is_active = item.name in active_folders
+            status = 'downloading' if is_active else 'completed'
+            
             downloads.append({
                 'name': item.name,
                 'path': str(item),
                 'files': file_count,
                 'size': format_size(total_size),
-                'date': mtime.strftime('%Y-%m-%d %H:%M')
+                'date': mtime.strftime('%Y-%m-%d %H:%M'),
+                'status': status,
+                'is_active': is_active
             })
     
     # Sort by date descending
@@ -501,6 +689,96 @@ def delete_download(folder_name):
         return jsonify({'success': True, 'deleted': folder_name})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/downloads/<folder_name>/continue', methods=['POST'])
+def continue_download(folder_name):
+    """Continue downloading an existing folder (resume incomplete download)"""
+    folder_path = DOWNLOADS_DIR / folder_name
+    if not folder_path.exists():
+        return jsonify({'error': 'Folder not found'}), 404
+    
+    data = request.json or {}
+    
+    # Extract domain from folder name (format: domain_timestamp)
+    parts = folder_name.split('_')
+    domain = '_'.join(parts[:-2]) if len(parts) > 2 else parts[0]
+    url = data.get('url', f'https://{domain}')
+    
+    # Default options for continue (with timestamping for resume)
+    options = data.get('options', {
+        'recursive': True,
+        'depth': 5,
+        'page_requisites': True,
+        'convert_links': True,
+        'no_parent': True,
+        'include_subdomains': True,
+        'ignore_robots': True
+    })
+    
+    use_wget2 = data.get('use_wget2', False)
+    
+    job_id = str(uuid.uuid4())[:8]
+    job = WgetJob(job_id, url, options, use_wget2, folder_name)
+    job.options['continue_download'] = True  # Flag for continue mode
+    jobs[job_id] = job
+    
+    # Start job in background
+    thread = threading.Thread(target=run_wget_job, args=(job_id,))
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify(job.to_dict())
+
+
+@app.route('/api/downloads/<folder_name>/restart', methods=['POST'])
+def restart_download(folder_name):
+    """Restart download from scratch (delete and re-download)"""
+    folder_path = DOWNLOADS_DIR / folder_name
+    if not folder_path.exists():
+        return jsonify({'error': 'Folder not found'}), 404
+    
+    data = request.json or {}
+    
+    # Extract domain from folder name
+    parts = folder_name.split('_')
+    domain = '_'.join(parts[:-2]) if len(parts) > 2 else parts[0]
+    url = data.get('url', f'https://{domain}')
+    
+    # Delete existing folder
+    shutil.rmtree(folder_path)
+    
+    # Default options for full re-download
+    options = data.get('options', {
+        'recursive': True,
+        'depth': 5,
+        'page_requisites': True,
+        'convert_links': True,
+        'no_parent': True,
+        'include_subdomains': True,
+        'ignore_robots': True,
+        'mirror_mode': True
+    })
+    
+    use_wget2 = data.get('use_wget2', True)
+    
+    job_id = str(uuid.uuid4())[:8]
+    job = WgetJob(job_id, url, options, use_wget2, folder_name)
+    jobs[job_id] = job
+    
+    # Start job in background
+    thread = threading.Thread(target=run_wget_job, args=(job_id,))
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify(job.to_dict())
+
+
+@app.route('/api/jobs/active')
+def get_active_jobs():
+    """Get only running jobs for active downloads display"""
+    active = [job.to_dict() for job in jobs.values() if job.status in ('pending', 'running')]
+    return jsonify(active)
 
 
 @app.route('/api/find-index/<folder_name>')
@@ -535,4 +813,5 @@ if __name__ == '__main__':
     print(f"Wget Admin starting...")
     print(f"Using wget: {WGET_PATH}")
     print(f"Downloads dir: {DOWNLOADS_DIR}")
+    load_jobs()  # Load saved jobs on startup
     socketio.run(app, host='0.0.0.0', port=5050, debug=True)
